@@ -2,7 +2,8 @@
 
 // ─── Day 1 ────────────────────────────────────────────────────────────────────
 // Features: scaffold, file loading, raw image preview, accordion, zoom/pan.
-// ASCII rendering, export, and settings persistence come in later days.
+// ─── Day 2 ────────────────────────────────────────────────────────────────────
+// Features: Standard-mode ASCII rendering, slider value displays, live preview.
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -16,6 +17,78 @@ const state = {
   lastMX:    0,
   lastMY:    0,
 };
+
+// ─── Settings reader ──────────────────────────────────────────────────────────
+
+function getSettings() {
+  const preset   = $('preset-select').value;
+  const charsRaw = $('chars-input').value;
+  return {
+    chars:           charsRaw.length ? charsRaw : (PRESETS[preset]?.chars ?? PRESETS.classic.chars),
+    mode:            $$('.mode-btn.active')[0]?.dataset.mode ?? 'standard',
+    scale:           parseFloat($('slider-scale').value),
+    fontSize:        parseInt($('slider-size').value, 10),
+    charW:           parseInt($('slider-cw').value, 10),
+    charH:           parseInt($('slider-ch').value, 10),
+    colorMode:       $('color-mode').value,
+    tintR:           parseInt($('slider-r').value, 10),
+    tintG:           parseInt($('slider-g').value, 10),
+    tintB:           parseInt($('slider-b').value, 10),
+    saturation:      parseFloat($('slider-sat').value),
+    brightness:      parseFloat($('slider-br').value),
+    contrast:        parseFloat($('slider-ct').value),
+    bgColor:         $('bg-color').value,
+    dither:          $('dither-check').checked,
+    edgeThresh:      parseInt($('slider-thresh').value, 10),
+    edgeSourceColor: $('edge-source-color').checked,
+    edgeTint:        $('edge-tint').value,
+    fps:             parseInt($('slider-fps').value, 10),
+    exportName:      $('export-name').value,
+  };
+}
+
+// ─── Render ───────────────────────────────────────────────────────────────────
+
+function renderFrame() {
+  const src = state.sources[state.frameIdx];
+  if (!src) return;
+
+  const opts = getSettings();
+
+  if (opts.mode !== 'standard') {
+    showToast(`${opts.mode.charAt(0).toUpperCase() + opts.mode.slice(1)} mode arrives in Day 3.`, 'info');
+    return;
+  }
+
+  setStatus('<span class="spinner"></span>Rendering…');
+
+  // Defer to next tick so the spinner paints before the heavy canvas work
+  setTimeout(() => {
+    try {
+      const rendered = renderASCII(src, opts);
+      outputCanvas.width  = rendered.width;
+      outputCanvas.height = rendered.height;
+      outputCanvas.getContext('2d').drawImage(rendered, 0, 0);
+      outputCanvas.style.display = 'block';
+      dropZone.style.display     = 'none';
+      outputDims.textContent     = `${rendered.width} × ${rendered.height}px`;
+      fitToWindow();
+      setStatus('Ready');
+    } catch (err) {
+      setStatus('Render error');
+      showToast(err.message, 'error');
+    }
+  }, 0);
+}
+
+// Debounced live-preview trigger
+let _liveTimer = null;
+function scheduleLiveRender() {
+  if (!$('live-preview').checked) return;
+  if (!state.sources.length) return;
+  clearTimeout(_liveTimer);
+  _liveTimer = setTimeout(renderFrame, 280);
+}
 
 // ─── DOM shortcuts ────────────────────────────────────────────────────────────
 
@@ -97,6 +170,7 @@ async function loadFiles(files) {
 
     showCurrentFrame();
     showToast(`Loaded ${canvases.length} image${canvases.length > 1 ? 's' : ''}.`, 'success');
+    renderFrame();
   } catch (err) {
     setStatus('Load failed: ' + err.message);
     showToast(err.message, 'error');
@@ -109,7 +183,7 @@ function goToFrame(idx) {
   if (!state.sources.length) return;
   state.frameIdx = Math.max(0, Math.min(idx, state.sources.length - 1));
   frameCounter.textContent = `${state.frameIdx + 1} / ${state.sources.length}`;
-  showCurrentFrame();
+  renderFrame();
 }
 
 // ─── Zoom & pan ───────────────────────────────────────────────────────────────
@@ -213,27 +287,89 @@ function init() {
     loadFiles(e.dataTransfer.files);
   });
 
-  // ── Mode switcher (wired up; rendering in Day 2) ───────────────────────────
+  // ── Slider value displays ──────────────────────────────────────────────────
+  const sliderMap = [
+    ['slider-scale',  'val-scale',  v => parseFloat(v).toFixed(2)],
+    ['slider-size',   'val-size',   v => v],
+    ['slider-cw',     'val-cw',     v => v],
+    ['slider-ch',     'val-ch',     v => v],
+    ['slider-r',      'val-r',      v => v],
+    ['slider-g',      'val-g',      v => v],
+    ['slider-b',      'val-b',      v => v],
+    ['slider-sat',    'val-sat',    v => parseFloat(v).toFixed(1)],
+    ['slider-br',     'val-br',     v => parseFloat(v).toFixed(1)],
+    ['slider-ct',     'val-ct',     v => parseFloat(v).toFixed(1)],
+    ['slider-fps',    'val-fps',    v => v],
+    ['slider-thresh', 'val-thresh', v => v],
+  ];
+  sliderMap.forEach(([sliderId, valId, fmt]) => {
+    const slider = $(sliderId);
+    const valEl  = $(valId);
+    if (!slider || !valEl) return;
+    slider.addEventListener('input', () => {
+      valEl.textContent = fmt(slider.value);
+      scheduleLiveRender();
+    });
+  });
+
+  // ── Preset selector: populate chars-input ────────────────────────────────
+  $('preset-select').addEventListener('change', () => {
+    const preset = $('preset-select').value;
+    $('chars-input').value = PRESETS[preset]?.chars ?? '';
+    scheduleLiveRender();
+  });
+  // Initialise chars-input on load
+  $('chars-input').value = PRESETS[DEFAULTS.preset].chars;
+
+  $('chars-input').addEventListener('input', scheduleLiveRender);
+
+  // ── Color mode: show/hide tint controls ──────────────────────────────────
+  function updateTintVisibility() {
+    const mode = $('color-mode').value;
+    $('tint-controls').style.display = (mode === 'mono' || mode === 'tint') ? '' : 'none';
+  }
+  $('color-mode').addEventListener('change', () => {
+    updateTintVisibility();
+    scheduleLiveRender();
+  });
+  updateTintVisibility();
+
+  // ── Misc controls that trigger live render ────────────────────────────────
+  ['bg-color', 'edge-tint'].forEach(id => {
+    $(id)?.addEventListener('input', scheduleLiveRender);
+  });
+  $('dither-check').addEventListener('change', scheduleLiveRender);
+
+  // ── Edge color toggle ─────────────────────────────────────────────────────
+  $('edge-source-color').addEventListener('change', () => {
+    $('edge-color-pick').style.display = $('edge-source-color').checked ? 'none' : '';
+    scheduleLiveRender();
+  });
+
+  // ── Live preview checkbox ─────────────────────────────────────────────────
+  $('live-preview').checked = true;
+  $('live-preview').addEventListener('change', () => {
+    if ($('live-preview').checked && state.sources.length) renderFrame();
+  });
+
+  // ── Mode switcher ─────────────────────────────────────────────────────────
   $$('.mode-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       $$('.mode-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       const mode = btn.dataset.mode;
       $('sec-edge-panel').style.display = mode === 'edge' ? '' : 'none';
-      showToast(`Mode "${btn.textContent}" — rendering in Day 2.`, 'info');
+      if (state.sources.length) renderFrame();
     });
   });
 
-  // ── Render button (wired up; rendering in Day 2) ──────────────────────────
+  // ── Render button ─────────────────────────────────────────────────────────
   $('btn-render').addEventListener('click', () => {
-    if (!state.sources.length) {
-      showToast('Load an image first.', 'error');
-      return;
-    }
-    showToast('ASCII rendering arrives in Day 2.', 'info');
+    if (!state.sources.length) { showToast('Load an image first.', 'error'); return; }
+    renderFrame();
   });
 
-  // ── Export buttons (wired up; export in Day 4+) ───────────────────────────
+  // ── Export buttons (Day 4+) ───────────────────────────────────────────────
   $$('.btn-export').forEach(btn => {
     btn.addEventListener('click', () => notYetImplemented(btn.dataset.format.toUpperCase()));
   });
