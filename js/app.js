@@ -4,6 +4,8 @@
 // Features: scaffold, file loading, raw image preview, accordion, zoom/pan.
 // ─── Day 2 ────────────────────────────────────────────────────────────────────
 // Features: Standard-mode ASCII rendering, slider value displays, live preview.
+// ─── Day 3 ────────────────────────────────────────────────────────────────────
+// Features: Edge detection, Braille, and Blocks render modes wired up.
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -55,17 +57,17 @@ function renderFrame() {
 
   const opts = getSettings();
 
-  if (opts.mode !== 'standard') {
-    showToast(`${opts.mode.charAt(0).toUpperCase() + opts.mode.slice(1)} mode arrives in Day 3.`, 'info');
-    return;
-  }
-
   setStatus('<span class="spinner"></span>Rendering…');
 
   // Defer to next tick so the spinner paints before the heavy canvas work
   setTimeout(() => {
     try {
-      const rendered = renderASCII(src, opts);
+      let rendered;
+      if      (opts.mode === 'standard') rendered = renderASCII(src, opts);
+      else if (opts.mode === 'edge')     rendered = renderEdge(src, opts);
+      else if (opts.mode === 'braille')  rendered = renderBraille(src, opts);
+      else if (opts.mode === 'block')    rendered = renderBlocks(src, opts);
+      else { showToast(`Unknown mode: ${opts.mode}`, 'error'); setStatus('Ready'); return; }
       outputCanvas.width  = rendered.width;
       outputCanvas.height = rendered.height;
       outputCanvas.getContext('2d').drawImage(rendered, 0, 0);
